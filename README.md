@@ -64,18 +64,33 @@ podman pod create --name okp -p 8983:8983 -p 8000:8000
 
 ```bash
 podman run -d --pod okp --name redhat-okp \
-  -e ACCESS_KEY=<your-access-key> \
+  -e ACCESS_KEY=${RHOKP_KEY} \
   -e SOLR_JETTY_HOST=0.0.0.0 \
+  -v okp-solr-data:/opt/solr/server/solr/portal/data \
+  --health-cmd="grep -q 'Started Solr server on port 8983' /opt/solr/server/logs/run-solr.log" \
+  --health-interval=10s \
+  --health-retries=5 \
+  --health-start-period=10s \
   registry.redhat.io/offline-knowledge-portal/rhokp-rhel9:latest
 ```
 
-The first start downloads and indexes content (~10 GB image, may take several minutes). Watch progress with:
+The command above will download the rhokp-rhel9:latest container, if not present, and indexes content (~10 GB image, may take several minutes). Watch progress with:
 
 ```bash
 podman logs -f redhat-okp
 ```
 
-Wait until you see `Started Solr server on port 8983`. Subsequent starts of the same container (`podman pod stop okp` / `podman pod start okp`) are faster because the index is cached. Removing the pod (`podman pod rm -f okp`) deletes the container and its index — the next `podman run` will re-index the content. To persist the index across recreations, add a named volume: `-v okp-solr-data:/opt/solr/server/solr/portal/data`.
+## Wait for RHOKP to become healthy
+```console
+podman wait --condition=healthy redhat-okp
+```
+
+## Manually check redhat-okp health
+```console
+podman inspect redhat-okp --format '{{.State.Health.Status}}'
+```
+
+Subsequent starts of the same container (`podman pod stop okp` / `podman pod start okp`) are faster because the index is cached. Removing the pod (`podman pod rm -f okp`) deletes the container and its index — the next `podman run` will re-index the content. To persist the index across recreations, add a named volume: `-v okp-solr-data:/opt/solr/server/solr/portal/data`.
 
 ### 3. Start the MCP server
 
@@ -108,6 +123,29 @@ curl -s -4 -N -X POST http://localhost:8000/mcp \
 ```
 
 You should see a response with `serverInfo.name: "RHEL OKP Knowledge Base"`.
+
+### Configure Claude CLI
+```console
+jq '.mcpServers' ~/.claude.json
+{
+  "notebooklm-mcp": {
+    "type": "stdio",
+    "command": "notebooklm-mcp",
+    "args": [],
+    "env": {}
+  },
+  "redhat-okp": {
+    "url": "http://localhost:8000/mcp",
+    "transport": "streamable-http"
+  }
+}
+```
+
+### Add Claude Skill
+```console
+mkdir ~/.claude/skills/redhat-product/
+cp SKILL.md ~/.claude/skills/redhat-product/SKILL.md
+```
 
 ### Cleanup
 
