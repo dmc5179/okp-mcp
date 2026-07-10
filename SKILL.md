@@ -1,6 +1,6 @@
 ---
 name: redhat-product
-description: Search Red Hat product documentation through the Offline Knowledge Portal
+description: Search Red Hat product documentation, CVEs, errata, solutions, and support articles via OKP MCP
 triggers:
   - "rhel"
   - "red hat"
@@ -12,6 +12,11 @@ triggers:
   - "kbase"
   - "knowledge base"
   - "openshift"
+  - "ansible"
+  - "satellite"
+  - "virtualization"
+  - "support case"
+  - "lifecycle"
 ---
 
 # Red Hat Product Documentation Skill
@@ -23,114 +28,170 @@ This skill provides access to official Red Hat product documentation, CVEs, erra
 Use this skill when you need to:
 - Search for official Red Hat product documentation
 - Look up CVE security advisories
-- Find errata and updates
+- Find errata and updates (RHBA, RHSA, RHEA)
 - Search Red Hat knowledge base articles and solutions
-- Get version-specific RHEL documentation
+- Get version-specific documentation (RHEL, OpenShift, Ansible, etc.)
 - Check support policies and lifecycle dates
 - Find deprecation status or changes after 2024
+- Troubleshoot known issues with official solutions
+- Get YAML examples and configuration guidance from docs
+
+**Do NOT use for:**
+- General Linux concepts well-known before 2024 (use existing knowledge)
+- Third-party documentation (use WebSearch instead)
 
 ## Prerequisites
 
-The Red Hat Offline Knowledge Portal must be running as a container with the MCP server accessible at `http://localhost:8000/mcp`.
-
-To verify the service is running:
-```bash
-curl -s -4 "http://localhost:8983/solr/portal/select?q=*:*&rows=0" | python3 -m json.tool
-```
+1. **OKP MCP Server** running
+   - Connection endpoint: `http://localhost:8000/mcp`
+   - Verify with: `/mcp` command or `curl -v http://localhost:8000/mcp`
 
 ## How This Skill Works
 
-When invoked, this skill automatically searches Red Hat's knowledge base using the `redhat-okp` MCP server. Claude will:
+When invoked, this skill automatically searches Red Hat's knowledge base using the `okp-mcp` MCP server via the `mcp__okp-mcp__search_portal` tool.
 
-1. Use the `search_portal` tool to find relevant Red Hat documentation
-2. Review the search results
-3. Use `get_document` to fetch detailed content when needed
-4. Provide you with answers based on official Red Hat documentation
+### Search Strategy
 
-## MCP Tools Used
+The skill uses **multi-query search** for better coverage:
 
-This skill uses two tools from the `redhat-okp` MCP server that you'll see Claude invoke:
+1. **Single Query** - Use for exact lookups:
+   - CVE IDs: `CVE-2024-1234`
+   - KB article numbers: `solution 7053480`
+   - Erratum names: `RHBA-2026:23001`
 
-### `mcp__redhat-okp__search_portal`
-Searches the Red Hat knowledge base for documentation, solutions, articles, CVEs, and errata.
+2. **Multiple Queries (2-3)** - Use for exploratory searches:
+   - Pass an array of query reformulations
+   - Results are merged using reciprocal rank fusion
+   - Documents matching across multiple phrasings rank higher
 
-**Parameters:**
-- `query` (string or array): Search query or up to 3 query reformulations
-- `max_results` (integer, default: 7): Maximum results (1-20)
+### Multi-Query Best Practices
 
-**Best Practices for Claude:**
-- Use complete sentences rather than bare keywords
-- Include product names and version numbers in every query
-- For multi-query searches, vary the search angle while keeping specificity
-- Include RHEL-specific terminology
-- For exact lookups (CVE IDs, KB numbers), a single query is sufficient
+**DO:**
+- Keep product names and versions in **every** query
+- Vary the search angle, not the specificity
+- Write complete questions/sentences (not bare keywords)
+- Include the user's original phrasing as one query
+- Use RHEL-specific terminology
 
-### `mcp__redhat-okp__get_document`
-Fetches the full content of a specific document by its ID or URL.
+**DON'T:**
+- Strip context to make queries "broader"
+- Reduce "RHEL 8 container on RHEL 9" to just "container deprecation"
+- Use bare keywords without context
 
-**Parameters:**
-- `doc_id` (string): Document ID or full URL from search results
-- `query` (string, optional): Original search question to get BM25-scored relevant passages
+**Examples:**
 
-**Best Practices for Claude:**
-- Always pass the `query` parameter for documentation pages to get relevant passages
-- Use the URL directly from `search_portal` results as the `doc_id`
-- Documentation pages without a query will return a nudge to provide one
+```yaml
+# BAD - bare keywords
+query: "virt-manager RHEL 9"
 
-## How to Answer User Questions
+# GOOD - complete sentence with context
+query: "Is virt-manager supported for managing virtual machines in RHEL 9?"
 
-1. **Search First**: Start with `search_portal` to find relevant documents. Use multiple query reformulations for better coverage.
+# BETTER - multi-query with different angles
+query:
+  - "Is virt-manager supported for managing virtual machines in RHEL 9?"
+  - "RHEL 9 virt-manager deprecation status and alternatives"
+  - "Managing KVM virtual machines on Red Hat Enterprise Linux 9"
+```
 
-2. **Review Results**: Examine the search results for relevant documents. Look for official documentation, knowledge base articles, and solutions.
+## Interpreting Results
 
-3. **Fetch Details**: Use `get_document` with the original query to get detailed content from the most relevant documents.
+### Deprecation/Removal Notices
+- Results marked with ⚠️ indicate deprecated or removed features
+- **Lead with the deprecation** if results conflict
+- Mention workarounds only as secondary notes
 
-4. **Interpret Results**: 
-   - Results marked 'Applicability: RHV only' apply to Red Hat Virtualization, not standard RHEL KVM
-   - Lead with deprecation/removal information when results conflict
-   - Enumerate all specific releases/dates explicitly in your answer
+### Applicability Warnings
+- `Applicability: RHV only` = Red Hat Virtualization (NOT standard RHEL KVM)
+- Do not recommend RHV-only solutions as primary answers for RHEL questions
 
-5. **Provide Clear Answers**: Synthesize the information from official sources and provide clear, actionable guidance.
+### Version-Specific Information
+- When results list specific releases or dates, enumerate them all
+- Don't generalize when docs provide version-specific details
 
-## Notes
+### Document Types
+The search returns multiple content types:
+- **Documentation**: Official product docs (most authoritative)
+- **Solution**: KB articles with troubleshooting steps
+- **Errata**: Bug fixes (RHBA), security (RHSA), enhancements (RHEA)
+- **CVE**: Security advisories
 
-- For well-known Linux concepts (vi commands, systemd units, common CLI tools), you may answer directly without searching
-- The knowledge base contains 600k+ documents covering all Red Hat products
-- Search results are ranked using reciprocal rank fusion when multiple queries are provided
-- Documentation pages can exceed 500KB; relevant passages are extracted automatically when a query is provided
+## Tool Parameters
 
-## Connection Details
+**`search_portal` tool:**
+```yaml
+mcp__okp-mcp__search_portal:
+  query: string | array[string]  # Single query or 2-3 reformulations
+  max_results: integer           # Default: 7 (recommended range: 5-10)
+```
 
-- **MCP Server Name**: `redhat-okp`
-- **Transport**: `streamable-http`
-- **URL**: `http://localhost:8000/mcp`
-- **Solr Endpoint**: `http://localhost:8983/solr/portal/select`
+**`get_document` tool:**
+```yaml
+mcp__okp-mcp__get_document:
+  doc_id: string      # URL from search results
+  query: string       # (Optional) Get BM25-scored relevant passages
+```
+
+## Examples
+
+### Example 1: Single Query (Exact Lookup)
+```
+User: "What's in RHBA-2026:23001?"
+
+Search: mcp__okp-mcp__search_portal
+  query: "RHBA-2026:23001"
+  max_results: 5
+```
+
+### Example 2: Multi-Query (Exploratory)
+```
+User: "How do I deploy the web terminal operator on OpenShift 4.21?"
+
+Search: mcp__okp-mcp__search_portal
+  query:
+    - "deploying web terminal operator OpenShift 4.21"
+    - "web terminal operator installation yaml OpenShift"
+    - "OpenShift web terminal operator subscription configuration"
+  max_results: 7
+```
+
+### Example 3: Follow-up with get_document
+```
+# After search returns a relevant doc URL
+Get Full Doc: mcp__okp-mcp__get_document
+  doc_id: "https://access.redhat.com/documentation/en-us/..."
+  query: "subscription yaml example"  # Get relevant passages
+```
 
 ## Troubleshooting
 
-If the MCP server is not responding:
+### Connection Issues
+```bash
+# Check if OKP MCP server is running
+curl -v http://localhost:8000/mcp
 
-1. Check if the OKP container is running:
-   ```bash
-   podman pod ps | grep okp
-   ```
+# Check port availability
+ss -tuln | grep 8000
+lsof -i :8000
 
-2. Verify Solr is responding:
-   ```bash
-   curl -s -4 "http://localhost:8983/solr/portal/select?q=*:*&rows=0"
-   ```
+# Test MCP connection from Claude Code
+/mcp
+```
 
-3. Verify MCP server is responding:
-   ```bash
-   curl -s -4 -N -X POST http://localhost:8000/mcp \
-     -H "Content-Type: application/json" \
-     -H "Accept: application/json, text/event-stream" \
-     -d '{"jsonrpc": "2.0", "method": "initialize", "params": {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "test", "version": "1.0"}}, "id": 1}'
-   ```
+### Common Errors
+- `ECONNRESET`: Server not running or crashed during connection
+- `Failed to reconnect`: Server needs to be restarted
+- `Document not found`: Invalid doc_id or document moved/removed
 
-4. Check if the pod is running:
-   ```bash
-   podman pod start okp
-   ```
+## Tips for Better Results
 
-See the main [README.md](../README.md) for detailed setup instructions.
+1. **Be Specific**: Include product names, versions, and context in every query
+2. **Use Official Terms**: "OpenShift Container Platform 4.21" vs "OCP"
+3. **Ask Complete Questions**: Full sentences beat keyword lists
+4. **Multi-angle Search**: Use 2-3 different phrasings for complex topics
+5. **Check Dates**: Solutions/docs may reference specific versions/dates - cite them
+6. **Verify Applicability**: Note RHV vs RHEL, supported vs deprecated features
+
+## Related Skills
+- `support-cases`: Query Red Hat support case data
+- `dataverse-query`: Search broader Red Hat internal knowledge
