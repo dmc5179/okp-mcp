@@ -57,7 +57,7 @@ Run the OKP Solr index and MCP server together using a podman pod.
 The pod groups both containers into a shared network namespace so they communicate via `localhost`. Ports are exposed at the pod level.
 
 ```bash
-podman pod create --name okp -p 8983:8983 -p 8000:8000
+podman pod create --name okp -p 127.0.0.1:8983:8983 -p 127.0.0.1:8000:8000
 ```
 
 ### 2. Start the OKP Solr index
