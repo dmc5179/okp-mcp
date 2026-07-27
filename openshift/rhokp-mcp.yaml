@@ -48,7 +48,7 @@ spec:
             drop:
               - ALL
       - name: rhokp
-        image: registry.redhat.io/offline-knowledge-portal/rhokp-rhel9:latest  # No longer available. Moved??
+        image: registry.redhat.io/offline-knowledge-portal/rhokp-rhel9:latest
         env:
         - name: SOLR_JETTY_HOST
           value: 0.0.0.0
@@ -161,6 +161,6 @@ spec:
     name: rhokp-mcp
     weight: 100
   wildcardPolicy: None
-  tls:
-    termination: edge
-    insecureEdgeTerminationPolicy: Redirect
+#  tls:                           # Can do TLS but need to change how tools connect to it due to SSL
+#    termination: edge
+#    insecureEdgeTerminationPolicy: Redirect
