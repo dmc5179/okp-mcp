@@ -4,7 +4,7 @@ metadata:
   name: rhokp-server
   namespace: rhokp-server
   labels:
-    app: rhokp-app
+    app: rhokp
 automountServiceAccountToken: false
 ---
 apiVersion: apps/v1
@@ -13,16 +13,16 @@ metadata:
   name: rhokp-server
   namespace: rhokp-server
   labels:
-    app: rhokp-app
+    app: rhokp
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: rhokp-app
+      app: rhokp
   template:
     metadata:
       labels:
-        app: rhokp-app
+        app: rhokp
     spec:
       serviceAccountName: rhokp-server
       automountServiceAccountToken: false
@@ -31,22 +31,6 @@ spec:
         seccompProfile:
           type: RuntimeDefault
       containers:
-      - name: rhokp-mcp
-        image: quay.io/danclark/okp-mcp:latest
-        #image: quay.io/redhat-user-workloads/rhel-lightspeed-tenant/okp-mcp:latest   # No longer available. Moved??
-        env:
-        - name: MCP_TRANSPORT
-          value: streamable-http
-        - name: MCP_SOLR_URL
-          value: "http://localhost:8983"  # This changes if I move the MCP container out of the same deployment pod
-        ports:
-        - name: solr
-          containerPort: 8983
-        securityContext:
-          allowPrivilegeEscalation: false
-          capabilities:
-            drop:
-              - ALL
       - name: rhokp
         image: registry.redhat.io/offline-knowledge-portal/rhokp-rhel9:latest
         env:
@@ -62,14 +46,13 @@ spec:
           containerPort: 8080
         - name: https
           containerPort: 8443
+        - name: solr
+          containerPort: 8983
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:
             drop:
               - ALL
-        #volumeMounts:
-        #- mountPath: /opt/solr/server/solr/portal/data
-        #  name: okp-solr-data-pvc
 ---
 apiVersion: v1
 kind: Secret
@@ -78,14 +61,13 @@ metadata:
   namespace: rhokp-server
 type: Opaque
 stringData:
-  # This is the key obtained from rhn.redhat.com, encoded in base64
   access-key: "${RHOKP_KEY}"
 ---
 apiVersion: v1
 kind: Service
 metadata:
   labels:
-    app: rhokp-app
+    app: rhokp
   name: rhokp-server
   namespace: rhokp-server
 spec:
@@ -94,32 +76,16 @@ spec:
   - IPv4
   ipFamilyPolicy: SingleStack
   ports:
-  - port: 8080
+  - name: http
+    port: 8080
     protocol: TCP
     targetPort: 8080
-  selector:
-    app: rhokp-app
-  sessionAffinity: None
-  type: ClusterIP
----
-apiVersion: v1
-kind: Service
-metadata:
-  labels:
-    app: rhokp-app
-  name: rhokp-mcp
-  namespace: rhokp-server
-spec:
-  internalTrafficPolicy: Cluster
-  ipFamilies:
-  - IPv4
-  ipFamilyPolicy: SingleStack
-  ports:
-  - port: 8000
+  - name: solr
+    port: 8983
     protocol: TCP
-    targetPort: 8000
+    targetPort: 8983
   selector:
-    app: rhokp-app
+    app: rhokp
   sessionAffinity: None
   type: ClusterIP
 ---
@@ -129,7 +95,7 @@ metadata:
   annotations:
     openshift.io/host.generated: "true"
   labels:
-    app: rhokp-app
+    app: rhokp
   name: rhokp-server
   namespace: rhokp-server
 spec:
@@ -143,24 +109,3 @@ spec:
   tls:
     termination: edge
     insecureEdgeTerminationPolicy: Redirect
----
-apiVersion: route.openshift.io/v1
-kind: Route
-metadata:
-  annotations:
-    openshift.io/host.generated: "true"
-  labels:
-    app: rhokp-app
-  name: rhokp-mcp
-  namespace: rhokp-server
-spec:
-  port:
-    targetPort: 8000
-  to:
-    kind: Service
-    name: rhokp-mcp
-    weight: 100
-  wildcardPolicy: None
-#  tls:                           # Can do TLS but need to change how tools connect to it due to SSL
-#    termination: edge
-#    insecureEdgeTerminationPolicy: Redirect
