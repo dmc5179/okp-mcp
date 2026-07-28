@@ -32,8 +32,8 @@ spec:
           type: RuntimeDefault
       containers:
       - name: rhokp-mcp
-        image: quay.io/danclark/okp-mcp:latest
-        #image: quay.io/redhat-services-prod/rhel-lightspeed-tenant/linux-mcp-server:latest  # Might be the new image but keeps crashing
+        #image: quay.io/danclark/okp-mcp:latest # Old copy before move
+        image: quay.io/redhat-user-workloads/rhel-lightspeed-tenant/rhel-knowledge-bridge:latest
         env:
         - name: MCP_TRANSPORT
           value: streamable-http
