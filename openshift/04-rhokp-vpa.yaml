@@ -1,0 +1,26 @@
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: rhokp-server
+  namespace: rhokp-server
+  labels:
+    app: rhokp
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: rhokp-server
+  updatePolicy:
+    updateMode: "Off"
+  resourcePolicy:
+    containerPolicies:
+    - containerName: rhokp
+      minAllowed:
+        #cpu: 500m    # VPA and HPA must not taget the same resource metric. HPA is covering CPU
+        memory: 2Gi
+      maxAllowed:
+        #cpu: "4"     # VPA and HPA must not taget the same resource metric. HPA is covering CPU
+        memory: 8Gi
+      controlledResources:
+      - cpu
+      - memory
