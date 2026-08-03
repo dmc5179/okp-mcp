@@ -1,0 +1,12 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: rhokp-server
+  namespace: rhokp-server
+  labels:
+    app: rhokp
+spec:
+  maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: rhokp
