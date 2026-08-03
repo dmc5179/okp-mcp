@@ -30,6 +30,13 @@ spec:
         runAsNonRoot: true
         seccompProfile:
           type: RuntimeDefault
+      topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector:
+          matchLabels:
+            app: rhokp-mcp
       containers:
       - name: rhokp-mcp
         #image: quay.io/danclark/okp-mcp:latest # Old copy before move
@@ -56,6 +63,13 @@ spec:
         ports:
         - name: mcp
           containerPort: 8000
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 256Mi
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:

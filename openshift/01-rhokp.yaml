@@ -48,6 +48,13 @@ spec:
           containerPort: 8443
         - name: solr
           containerPort: 8983
+        resources:
+          requests:
+            cpu: 500m
+            memory: 2Gi
+          limits:
+            cpu: "2"
+            memory: 4Gi
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:
