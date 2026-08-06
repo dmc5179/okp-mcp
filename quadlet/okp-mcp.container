@@ -10,9 +10,13 @@ Image=quay.io/redhat-user-workloads/rhel-lightspeed-tenant/okp-mcp:latest
 ContainerName=okp-mcp
 Network=okp.network
 PublishPort=8000:8000
+Volume=okp-mcp-cache.volume:/cache
 
 Environment=MCP_TRANSPORT=streamable-http
 Environment=MCP_SOLR_URL=http://okp-solr:8983
+Environment=MCP_CACHE_DIR=/cache
+Environment=MCP_CACHE_SIZE_LIMIT=500000000
+Environment=MCP_CACHE_TTL=86400
 AutoUpdate=registry
 
 [Service]

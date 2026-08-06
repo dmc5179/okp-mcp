@@ -1,0 +1,5 @@
+# Persistent cache for diskcache SQLite store.
+# Survives container restarts and upgrades.
+
+[Volume]
+VolumeName=okp-mcp-cache
