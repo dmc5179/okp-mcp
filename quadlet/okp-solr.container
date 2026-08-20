@@ -9,6 +9,8 @@ Image=registry.redhat.io/offline-knowledge-portal/rhokp-rhel9:latest
 ContainerName=okp-solr
 Network=okp.network
 PublishPort=8983:8983
+PublishPort=8080:8080
+PublishPort=8443:8443
 Volume=okp-solr-data.volume:/opt/solr/server/solr/portal/data
 
 Environment=SOLR_JETTY_HOST=0.0.0.0
