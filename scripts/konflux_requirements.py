@@ -1,51 +1,44 @@
 #!/usr/bin/env python3
-"""Regenerate Hermeto-consumable dependency manifests for hermetic Konflux builds.
+"""Generate freeze files for deterministic and hermetic builds.
 
-uv.lock stays the single source of truth. These manifests are generated
-artifacts derived from it:
-  .konflux/requirements.txt          runtime deps (hash-pinned, from uv.lock)
-  .konflux/requirements-build.txt    transitive build deps (hash-pinned, hatchling only)
-  .konflux/requirements-build-all.txt  full transitive build tree (hash-pinned)
-  .konflux/requirements-build-pypi.txt packages missing from Konflux proxy (direct PyPI)
+The following freeze files are created:
+  .konflux/requirements.txt            runtime deps (from uv.lock)
+  .konflux/requirements-build.txt      direct build requirements (should match pyproject.toml)
+  .konflux/requirements-build-all.txt  build requirements for this project and indirect dependencies
+  .konflux/hermeto/build.txt           build deps served by the CI proxy
+  .konflux/hermeto/build-pypi.txt      build deps that must come from PyPI
 
-The hermetic build (Hermeto type:pip) prefetches these; the Containerfile
-installs from the offline mirror. Local/dev builds still use `uv sync`.
+pip reads the .konflux/*.txt files (index resolved from the offline mirror).
+Hermeto reads the .konflux/hermeto/*.txt files, which are flat and split by
+index because Hermeto scopes --index-url per file and ignores nested -r.
+
+The hermetic build (Hermeto type:pip) prefetches these.
+The Containerfile installs from the offline mirror.
+Local/dev builds still use `uv sync`.
 
 Run this whenever uv.lock or the build-system requirement changes, then
 commit the regenerated files. CI verifies they are in sync (see Makefile).
 """
 
-# ruff: noqa: S603,S607 -- script runs hardcoded external tools found via PATH
+# ruff: noqa: S603 -- script runs hardcoded external tools found via PATH
 
-import os
-import re
+import shutil
 import subprocess
 
+from itertools import chain
 from pathlib import Path
 
 
-KONFLUX_DIR = Path(".konflux")
+UV_BIN = shutil.which("uv") or "uv"
+REPO_ROOT = Path(__file__).parents[1]
+KONFLUX_DIR = REPO_ROOT / ".konflux"
 REQ_FILE = KONFLUX_DIR / "requirements.txt"
 BUILD_FILE = KONFLUX_DIR / "requirements-build.txt"
 BUILD_ALL_FILE = KONFLUX_DIR / "requirements-build-all.txt"
 BUILD_PYPI_FILE = KONFLUX_DIR / "requirements-build-pypi.txt"
-
-# Pin uv-build to a version compatible with UBI 10's rustc (1.92). pybuild-deps
-# resolves the latest version, but uv-build >=0.11.8 requires rustc >=1.93 and
-# the from-source hermetic build compiles it from sdist. 0.11.7 is the newest
-# release with MSRV 1.92. py-key-value-aio accepts >=0.11.4,<0.12.
-#
-# This cannot be a pyproject.toml constraint-dependency because pybuild-deps
-# does its own resolution and does not read uv's constraint configuration.
-# The only way to force a specific version is text replacement in the output.
-UV_BUILD_PIN = (
-    "uv-build==0.11.7 \\\n    --hash=sha256:258e3a10929b5de79074078ba1ad8edbdd4db5d9c3cafba81f11b329eeaaca08\n"
-)
-
-# Packages the Konflux artifact registry proxy cannot find. These go into a
-# separate file with --index-url pointing directly at PyPI. Add new package
-# names here as failures are discovered.
-PROXY_MISSING = re.compile(r"^(setuptools-rust|vcs-versioning)==")
+HERMETO_DIR = KONFLUX_DIR / "hermeto"
+HERMETO_BUILD_FILE = HERMETO_DIR / "build.txt"
+HERMETO_BUILD_PYPI_FILE = HERMETO_DIR / "build-pypi.txt"
 
 
 def count_packages(path: Path) -> int:
@@ -53,8 +46,13 @@ def count_packages(path: Path) -> int:
     return sum(1 for line in path.read_text().splitlines() if line and line[0].isalpha())
 
 
-def export_runtime_deps() -> None:
-    """Export runtime deps from uv.lock → requirements.txt.
+def clean() -> None:
+    for file in KONFLUX_DIR.rglob("*.txt"):
+        file.unlink()
+
+
+def export_deps() -> None:
+    """Freeze requirements: uv.lock → requirements.txt.
 
     --prune drops win32-only transitive deps (pywin32 via mcp, pywin32-ctypes
     via keyring, colorama). uv export emits these with a sys_platform == 'win32'
@@ -62,133 +60,146 @@ def export_runtime_deps() -> None:
     tries to fetch pywin32 for Linux, finds no distribution, and fails the build.
     The runtime is always Linux/distroless, so these are never installed.
     """
+    prune = ("colorama", "pywin32", "pywin32-ctypes")
+    prune_args = list(chain.from_iterable(("--prune", package) for package in prune))
     subprocess.run(
         [
-            "uv",
+            UV_BIN,
             "export",
             "--frozen",
             "--no-emit-project",
             "--no-dev",
+            "--no-header",
+            "--no-annotate",
             "--format",
             "requirements-txt",
-            "--prune",
-            "colorama",
-            "--prune",
-            "pywin32",
-            "--prune",
-            "pywin32-ctypes",
+            *prune_args,
             "-o",
             str(REQ_FILE),
         ],
         check=True,
-        text=True,
+        stdout=subprocess.DEVNULL,
     )
 
 
 def export_build_deps() -> None:
-    """Export hatchling build backend deps → requirements-build.txt."""
-    result = subprocess.run(
-        ["uv", "pip", "compile", "--generate-hashes", "-"],
-        input="hatchling\n",
-        capture_output=True,
-        check=True,
-        text=True,
-    )
-    # Strip comment and blank lines
-    lines = [line for line in result.stdout.splitlines() if line and not line.startswith("#")]
-    BUILD_FILE.write_text("\n".join(lines) + "\n")
+    """Freeze build requirements: requirements-build.in → requirements-build.txt."""
 
-
-def export_full_build_tree() -> None:
-    """Export full transitive build tree → requirements-build-all.txt.
-
-    pybuild-deps reads requirements.txt and pyproject.toml build-system.requires,
-    resolves every PEP 517 build backend needed to compile each sdist, and outputs
-    a hash-pinned manifest.
-    """
-    (Path.home() / ".cache" / "pybuild-deps").mkdir(parents=True, exist_ok=True)
+    # Generate freeze file for direct build dependencies.
     subprocess.run(
         [
-            "uvx",
-            "pybuild-deps",
+            UV_BIN,
+            "pip",
             "compile",
             "--generate-hashes",
             "--no-header",
-            "-o",
-            str(BUILD_ALL_FILE),
-            str(REQ_FILE),
+            "--no-annotate",
+            "--output-file",
+            BUILD_FILE,
+            BUILD_FILE.with_suffix(".in"),
         ],
+        stdout=subprocess.DEVNULL,
+        check=True,
+        text=True,
+    )
+
+    # Generate freeze file for direct and indirect build requirements.
+    # Use two requirements files as input since only heremeto needs separate
+    # freeze files.
+    subprocess.run(
+        [
+            UV_BIN,
+            "pip",
+            "compile",
+            "--generate-hashes",
+            "--no-header",
+            "--no-annotate",
+            "--output-file",
+            BUILD_ALL_FILE,
+            BUILD_ALL_FILE.with_suffix(".in"),
+            BUILD_PYPI_FILE.with_suffix(".in"),
+        ],
+        stdout=subprocess.DEVNULL,
         check=True,
         text=True,
     )
 
 
-def pin_uv_build() -> None:
-    """Replace the uv-build entry in requirements-build-all.txt with a pinned version.
+def export_hermeto_files() -> None:
+    """Freeze Hermeto build requirements into .konflux/hermeto/.
 
-    The pinned version is compatible with UBI 10's rustc (1.92). pybuild-deps
-    resolves the latest, but uv-build >=0.11.8 needs rustc >=1.93.
+    Hermeto scopes --index-url per file so the build deps are split into two
+    flat files: build.txt for packages served by the CI proxy (default index)
+    and build-pypi.txt for packages that must come from PyPI.
     """
-    text = BUILD_ALL_FILE.read_text()
 
-    # Match: "uv-build==<version> \" followed by continuation "--hash=" lines,
-    # then the next non-continuation line (or EOF).
-    text, count = re.subn(
-        r"^uv-build==.*?\n(?:    --hash=.*\n)*",
-        UV_BUILD_PIN,
-        text,
-        flags=re.MULTILINE,
+    # Generate freeze file for build dependencies available through the CI proxy.
+    # Exclude packages listed in requirements-build-pypi.in.
+    subprocess.run(
+        [
+            UV_BIN,
+            "pip",
+            "compile",
+            "--generate-hashes",
+            "--excludes",
+            BUILD_PYPI_FILE.with_suffix(".in"),
+            "--no-header",
+            "--no-annotate",
+            "--output-file",
+            HERMETO_BUILD_FILE,
+            BUILD_ALL_FILE.with_suffix(".in"),
+        ],
+        stdout=subprocess.DEVNULL,
+        check=True,
+        text=True,
     )
-    if count == 0:
-        raise RuntimeError("uv-build entry not found in " + str(BUILD_ALL_FILE))
 
-    BUILD_ALL_FILE.write_text(text)
+    # Generate freeze file for dependencies that must come from PyPI and are not
+    # available through the CI proxy. Indirect dependencies are skipped (--no-deps)
+    # so that indirect dependencies are not listed in this file.
+    subprocess.run(
+        [
+            UV_BIN,
+            "pip",
+            "compile",
+            "--no-deps",
+            "--generate-hashes",
+            "--no-header",
+            "--no-annotate",
+            "--output-file",
+            HERMETO_BUILD_PYPI_FILE,
+            BUILD_PYPI_FILE.with_suffix(".in"),
+        ],
+        stdout=subprocess.DEVNULL,
+        check=True,
+        text=True,
+    )
 
-
-def split_proxy_missing() -> None:
-    """Split packages missing from the Konflux proxy into a separate file.
-
-    Packages matching PROXY_MISSING go to requirements-build-pypi.txt with an
-    --index-url header pointing directly at PyPI. The rest stay in
-    requirements-build-all.txt.
-    """
-    keep_lines: list[str] = []
-    pypi_lines: list[str] = []
-    target = keep_lines  # current output target
-
-    for line in BUILD_ALL_FILE.read_text().splitlines(keepends=True):
-        # Package lines start with a letter; continuation lines start with spaces
-        if line and line[0].isalpha():
-            target = pypi_lines if PROXY_MISSING.match(line) else keep_lines
-        target.append(line)
-
-    BUILD_ALL_FILE.write_text("".join(keep_lines))
-    BUILD_PYPI_FILE.write_text("--index-url https://pypi.org/simple/\n\n" + "".join(pypi_lines))
+    # Add PyPI URL to the beginning of the file.
+    with HERMETO_BUILD_PYPI_FILE.open("r+") as f:
+        content = f.read()
+        f.seek(0)
+        f.write("--index-url https://pypi.org/simple/\n\n" + content)
 
 
 def main() -> None:
     """Regenerate all .konflux manifests from uv.lock."""
-    # cd to repo root
-    repo_root = subprocess.run(
-        ["git", "rev-parse", "--show-toplevel"],
-        capture_output=True,
-        check=True,
-        text=True,
-    ).stdout.strip()
-    os.chdir(repo_root)
+    print("Creating freeze files...")
     KONFLUX_DIR.mkdir(exist_ok=True)
+    HERMETO_DIR.mkdir(exist_ok=True)
 
-    export_runtime_deps()
+    clean()
+    export_deps()
     export_build_deps()
-    export_full_build_tree()
-    pin_uv_build()
-    split_proxy_missing()
+    export_hermeto_files()
 
-    print(f"Wrote {REQ_FILE} ({count_packages(REQ_FILE)} packages)")
-    print(f"Wrote {BUILD_FILE} ({count_packages(BUILD_FILE)} packages, hatchling only)")
-    print(f"Wrote {BUILD_ALL_FILE} ({count_packages(BUILD_ALL_FILE)} packages, full tree)")
-    print(f"Wrote {BUILD_PYPI_FILE} ({count_packages(BUILD_PYPI_FILE)} packages, direct PyPI)")
-    print("Remember to commit all four files.")
+    print(f"Wrote {REQ_FILE.relative_to(REPO_ROOT)} ({count_packages(REQ_FILE)} packages)")
+    print(f"Wrote {BUILD_FILE.relative_to(REPO_ROOT)} ({count_packages(BUILD_FILE)} packages, hatchling only)")
+    print(f"Wrote {BUILD_ALL_FILE.relative_to(REPO_ROOT)} ({count_packages(BUILD_ALL_FILE)} packages, full tree)")
+    print(f"Wrote {HERMETO_BUILD_FILE.relative_to(REPO_ROOT)} ({count_packages(HERMETO_BUILD_FILE)} packages, proxy)")
+    pypi_count = count_packages(HERMETO_BUILD_PYPI_FILE)
+    print(f"Wrote {HERMETO_BUILD_PYPI_FILE.relative_to(REPO_ROOT)} ({pypi_count} packages, direct PyPI)")
+    print("Remember to commit all files.")
 
 
 if __name__ == "__main__":

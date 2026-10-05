@@ -36,32 +36,32 @@ jobs:
             step_name: Run lint
             command: make lint
 
+          - name: Format
+            step_name: Run format check
+            command: make format
+
           - name: Complexity
             step_name: Check complexity
             command: make radon
 
-          - name: Manifests
-            step_name: Check hermetic manifests
-            command: make check-konflux-requirements
-
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install Python ${{ matrix.python-version }}
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version-file: pyproject.toml
 
       - name: Install uv
-        uses: astral-sh/setup-uv@d31148d669074a8d0a63714ba94f3201e7020bc3 # v8.3.0
-        with:
-          enable-cache: true
-          prune-cache: false
+        # zizmor: ignore[cache-poisoning] -- this job only runs linters and tests, never publishes artifacts
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
 
       - name: Install dependencies
         run: |
-          uv sync --locked
+          uv sync --locked --group dev
           echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
       - name: ${{ matrix.test.step_name }}
@@ -84,25 +84,26 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install Python
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ matrix.python-version }}
 
       - name: Install uv
-        uses: astral-sh/setup-uv@d31148d669074a8d0a63714ba94f3201e7020bc3 # v8.3.0
-        with:
-          enable-cache: true
-          prune-cache: false
+        # zizmor: ignore[cache-poisoning] -- this job only runs tests, never publishes artifacts
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
 
       - name: Install dependencies
-        run: uv sync --locked --group dev
+        run: |
+          uv sync --locked --group dev
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
       - name: Run tests
         run: make test
-
 
   build:
     name: Build - ${{ matrix.platform }}
@@ -124,16 +125,18 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Build and load
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: Containerfile
@@ -147,3 +150,13 @@ jobs:
 
       - name: Test container startup
         run: scripts/test-container-startup.sh okp-mcp:test-${{ matrix.platform }}
+
+  functional:
+    name: Functional Tests
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build
+    uses: ./.github/workflows/functional.yml
+    secrets:
+      REGISTRY_REDHAT_IO_USERNAME: ${{ secrets.REGISTRY_REDHAT_IO_USERNAME }}
+      REGISTRY_REDHAT_IO_PASSWORD: ${{ secrets.REGISTRY_REDHAT_IO_PASSWORD }}
+      OKP_ACCESS_KEY: ${{ secrets.OKP_ACCESS_KEY }}

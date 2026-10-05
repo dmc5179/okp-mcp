@@ -32,6 +32,8 @@ make test        # pytest with coverage
 make konflux-requirements        # regenerate .konflux hermetic manifests from uv.lock
 make check-konflux-requirements  # fail if .konflux manifests drifted from uv.lock
 make rpm-lock                    # regenerate rpms.lock.yaml from rpms.in.yaml
+make lock                        # resolve deps and update uv.lock
+make freeze                      # lock + regenerate .konflux manifests (preferred workflow)
 make hermeto-prefetch             # run Hermeto prefetch locally (requires podman)
 make hermeto-clean                # remove .hermeto-out/
 ```
@@ -68,9 +70,12 @@ Test scenarios live in `tests/functional_cases.py` as `FunctionalCase` dataclass
 
 Functional tests are **deselected by default** via `pytest_collection_modifyitems` in `tests/conftest.py`. They only run when explicitly requested with `-m functional`. They require a running OKP Solr container (`podman-compose up -d`); tests skip automatically if Solr is unreachable.
 
+A second functional module, `tests/test_functional_document.py`, exercises the `get_document` retrieval layer against live Solr. It seeds a real document via `_run_portal_search()`, then calls `_fetch_document_with_query()` / `_fetch_document_raw()` to prove the doc_id drives retrieval while the caller's query only selects highlights (it does not gate retrieval), and that a visible document URL round-trips through `_normalize_doc_id()` before the fetch layer.
+
 **Key files**:
 - `tests/functional_cases.py`: `FunctionalCase` dataclass + parametrized RSPEED test data
 - `tests/test_functional.py`: test runner calling `_run_portal_search()` with structured assertions
+- `tests/test_functional_document.py`: `get_document` retrieval tests (query-does-not-gate, highlight selection, URL normalization round-trip)
 
 ## Project Layout
 
@@ -93,13 +98,15 @@ src/okp_mcp/
     shared.py    # shared tool constants
   solr.py        # Solr query builder, BM25 paragraph extraction, RHV filtering
   bm25.py        # Pure-Python BM25Plus scorer (drop-in for rank_bm25, no numpy)
-  content.py     # Boilerplate stripping, content truncation, text cleaning
+  content.py     # Boilerplate stripping, content truncation, text cleaning, section outline
+  outline.py     # Section anchors parsed from the OKP HTML mirror (fetch + LRU cache)
   formatting.py  # Result annotation, deprecation/replacement detection, sort keys
   types.py       # Shared TypedDicts: SolrDoc, SolrHighlighting, SolrResponseBody, SolrResponse
 tests/
   conftest.py          # shared fixtures (solr mocks, sample responses) + functional marker deselection
   functional_cases.py  # FunctionalCase dataclass + parametrized RSPEED test data
   test_functional.py   # functional test runner: calls _run_portal_search() against live Solr, asserts on PortalChunk results
+  test_functional_document.py  # functional get_document tests: query does not gate retrieval, highlight selection, URL normalization round-trip
   test_portal.py       # portal.py unit tests: query builders, chunk conversion, RRF, formatting, single/multi-query orchestrators
   test_*.py            # unit test modules mirror src structure
 .pre-commit-config.yaml  # pre-commit hook definitions (ruff, gitleaks, whitespace, YAML/TOML checks)
@@ -118,13 +125,15 @@ rpms.lock.yaml                # resolved RPM dependency tree (generated from rpm
 .github/
   CODEOWNERS               # PR review assignment (@rhel-lightspeed/developers)
   workflows/
-    ci.yml                 # CI/CD: lint, typecheck, radon, pytest matrix, container build+push
+    ci.yml                 # CI: lint, typecheck, radon, pytest matrix, container build+push
+    manifests.yml          # Hermetic manifest drift check (runs only when uv.lock or .konflux/ change)
     functional.yml         # Functional tests against live Solr (triggered after ci.yml)
     scorecard.yml          # OpenSSF Scorecard: security posture, weekly + push-to-main
 docs/
-  CONTAINER_BUILD.md     # Container build process, data flow diagrams, hermetic builds
-  RELEASE_BRANCHES.md    # Release branch workflow
-  SOLR_EXPLORATION.md    # Historical: original redhat-okp container schema map
+  CONTAINER_BUILD.md         # Container build process, data flow diagrams, hermetic builds
+  RELEASE_BRANCHES.md        # Release branch workflow
+  SOLR_EXPLORATION.md        # Historical: original redhat-okp container schema map
+  UPDATING_REQUIREMENTS.md   # Dependency update workflow: make freeze, lock, konflux-requirements
 openshift/
   okp-mcp.yml                   # OpenShift deployment template (Deployment, Service, ServiceAccount)
   qe-gating-stage-trigger.yml   # OpenShift Job template that triggers the auto-qe-gating GitLab pipeline after staging deploys
@@ -137,6 +146,76 @@ quadlet/
 SECURITY.md            # Vulnerability reporting via GitHub Security Advisories
 ```
 
+## Section Anchors (get_document outlines)
+
+`get_document` puts real URL fragments on both documentation paths: without a query it
+returns the page's section outline instead of content, and with a query it labels each
+returned passage with the section it came from. Either way the caller can link straight to
+a section rather than to the whole guide.
+
+The anchors cannot come from Solr. Red Hat assigns them in the AsciiDoc source -- "Kafka
+tuning overview" is published at `#con-config-tuning-intro-str` -- and no indexed field
+carries them; deriving slugs from heading text matched 1 heading in 44 when measured
+against a live guide.
+
+They come from the OKP appliance instead, which serves the rendered HTML over httpd on
+port 8080 alongside Solr on 8983. Solr document ids *are* the mirror's paths, so
+`outline.py` fetches `{html_mirror_url}{id}` and parses the `<section id>` elements.
+Measured on a 250-document sample: all reachable, 236 expose `<section id>`, and the
+remaining 14 are single-topic pages with no subsections. Anchors produced for one guide
+matched the public docs.redhat.com fragments 45 of 45.
+
+- Configure with `MCP_OKP_HTML_URL`; it defaults to the `solr_url` host on port 8080.
+  Set it to `-` to disable the lookup.
+- In-container deployments need no configuration: the mcp container shares the pod
+  network, so the derived `http://<solr-host>:8080` already resolves to the mirror.
+- `podman-compose.yml` publishes the mirror as `8085:8080` for running the server from
+  source on the host; `.mcp.json` sets `MCP_OKP_HTML_URL` to match. Host port 8080 is
+  avoided because it is heavily contended -- pointing the mirror at an unrelated local
+  service yields an outline with no anchors rather than wrong ones, but it is still a
+  wasted request per lookup.
+- Passages are placed by locating their text in the mirror's body via
+  `DocumentOutline.locate()`. Solr's `main_content` cannot be used for this: it leads with
+  the page's table of contents, which repeats most headings, so offsets computed against it
+  attribute passages to whichever heading the ToC listed. Measured over 146 highlight
+  passages from 33 guides: all 104 drawn from real prose were placed correctly and the 42
+  misses were every one a ToC fragment -- so `locate()` returning None means "not body
+  text", and those passages keep a bare `Passage N:` label rather than borrowing a
+  neighbour's anchor. (That also makes an unplaceable passage a reliable ToC detector, if
+  filtering them out is ever wanted.)
+- Passages shorter than `_MIN_PROBE_CHARS` are placed only when their text occurs exactly
+  once in the body. Probing needs 25 characters, and RHV sentence filtering can leave a
+  genuine prose highlight shorter than that; calling it unplaceable would hand it to the
+  ToC filter, while an unconditional `find()` would give repeated text like "Note" the
+  first section that happens to contain it.
+- The located section is resolved once per passage and carried through to the label.
+  `locate()` scans a ~150KB body up to four times, so re-deriving it while formatting
+  costs a second full pass per passage for an answer already computed.
+- Do NOT log the mirror URL. `MCP_OKP_HTML_URL` can carry credentials and the derived
+  default names an internal host, so startup logs the status only and a failed fetch logs
+  the document path with a status code or exception type. `str(httpx.HTTPStatusError)`
+  embeds the request URL, which is why the exception is summarised rather than formatted
+  into the message.
+- Passages that `locate()` cannot place are dropped as ToC noise, but only when prose
+  remains: an unavailable mirror makes everything look unplaceable, and a reference manual
+  can legitimately highlight nothing but heading runs. Measured over 39 guide+query pairs,
+  9 (23%) shed a ToC passage for -17% passage characters; 13 returned nothing but ToC and
+  were left alone. Filtering is a subset in Solr's own order, so relevance cannot regress.
+- Do NOT raise `hl.snippets` to compensate for the dropped passages. It was tried:
+  `hl.snippets` re-fragments the field rather than extending the list, and going from 10 to
+  24 pushed the three relevant admission passages out of the top three in favour of the
+  glossary. Aggregate passage and character counts improved while the answer got worse.
+- Anchoring covers Solr highlight passages. The BM25 fallback path
+  (`_extract_relevant_section`) is not anchored yet.
+- Outlines are trimmed to `_MAX_OUTLINE_CHARS` (15K) by dropping the deepest nesting
+  levels, not by truncating the list. Mirror outlines run to a median of 22 sections but
+  a p90 of 181 and a max of 460 (~37KB), and the sections a reader wants are as often in
+  the last chapter as the first -- a flat count cap dropped OpenShift's Chapter 9
+  entirely. The 460-section worst case degrades to its top three levels at ~11KB.
+- Every failure (mirror down, document absent, page without sections) falls back to a
+  title-only outline built from `heading_h1`/`heading_h2`. The lookup must never turn a
+  working `get_document` call into an error.
+
 ## Where to Look
 
 | Task | Location | Notes |
@@ -147,8 +226,11 @@ SECURITY.md            # Vulnerability reporting via GitHub Security Advisories
 | Add/modify intent detection | `src/okp_mcp/intent.py` | Append `IntentRule` to `INTENT_RULES` at the correct priority position |
 | Change portal search logic | `src/okp_mcp/portal.py` | Query builders, chunk conversion, RRF fusion, single/multi-query orchestrators, formatting |
 | Change Solr query logic | `src/okp_mcp/solr.py` | `_solr_query()` builds edismax params; `_clean_query()` for tokenization |
+| Change document retrieval query | `src/okp_mcp/tools/document.py` | `_fetch_document_with_query()` selects the doc via `q` under `defType=lucene` and passes the caller's query as `hl.q` (highlights only) so `mm` never gates retrieval; `_doc_id_filter()` normalizes ID suffix forms |
 | Modify result formatting | `src/okp_mcp/formatting.py` | `annotate_result()` for deprecation/EOL (used by portal.py) |
 | Change content cleaning | `src/okp_mcp/content.py` | `strip_boilerplate()` regex, `truncate_content()` |
+| Change the section outline | `src/okp_mcp/content.py` | `format_sections()` renders anchors from `outline.py` when present, else falls back to `heading_h1`/`heading_h2` titles. `_fit_to_budget()` trims to `_MAX_OUTLINE_CHARS` by shedding the deepest nesting levels first, never by cutting the tail; `clean_heading()` normalizes the NBSP numbering separators |
+| Change section anchor lookup | `src/okp_mcp/outline.py` | `parse_document()` extracts `<section id>` sections plus locatable body text with stdlib `html.parser`; `DocumentOutline.locate()` maps a passage to its section; `OutlineFetcher` fetches and LRU-caches parses from the HTML mirror. Every failure degrades to `NO_OUTLINE` — never raise |
 | Modify config/CLI args | `src/okp_mcp/config.py` | Add field to `ServerConfig`; auto-generates CLI arg and `MCP_`-prefixed env var |
 | Enable stateless mode | `src/okp_mcp/config.py` | Enabled by default. `--stateless-http false` or `MCP_STATELESS_HTTP=false` to disable |
 | Add functional test case | `tests/functional_cases.py` | Add `FunctionalCase` to `FUNCTIONAL_TEST_CASES` list |
@@ -157,11 +239,12 @@ SECURITY.md            # Vulnerability reporting via GitHub Security Advisories
 | Trigger QE pipeline after staging deploy | `openshift/qe-gating-stage-trigger.yml` | OpenShift Job template; calls the GitLab CI trigger API for the auto-qe-gating project. Secret `auto-qe-trigger` supplies `gitlab-url`, `project-id`, `trigger-token`. |
 | Run locally with systemd | `quadlet/` | Rootless quadlet files: `.container`, `.network`, `.volume`; see `quadlet/README.md` |
 | Modify pre-commit hooks | `.pre-commit-config.yaml` | Runs on every commit: ruff, gitleaks, whitespace, YAML/TOML checks |
+| Update Python dependencies | `pyproject.toml`, `uv.lock`, `.konflux/` | See [docs/UPDATING_REQUIREMENTS.md](docs/UPDATING_REQUIREMENTS.md); `make freeze` is the preferred single command |
 | Change hermetic build deps | `scripts/konflux_requirements.py`, `.konflux/` | Regenerate with `make konflux-requirements` after a `uv.lock`/build-system change; CI gates drift |
 | Change RPM toolchain deps | `rpms.in.yaml`, `scripts/install-toolchain.sh` | Edit `rpms.in.yaml`, run `make rpm-lock`, update `install-toolchain.sh` if package list changed |
 | Change container install logic | `scripts/container-install.sh`, `Containerfile` | Build venv → wheel → app venv; branches on `BUILD_FROM_SOURCE` and `/cachi2/cachi2.env` |
 | Toggle hermetic build | `.tekton/pull_request.yaml`, `.tekton/push.yaml` | `hermetic` + `prefetch-input` params; pipeline already wires `prefetch-dependencies` |
-| Modify CI/CD workflows | `.github/workflows/` | `ci.yml` (test+container), `functional.yml` (Solr integration), `scorecard.yml` (OpenSSF) |
+| Modify CI/CD workflows | `.github/workflows/` | `ci.yml` (test+container), `manifests.yml` (hermetic drift), `functional.yml` (Solr integration), `scorecard.yml` (OpenSSF) |
 | Solr schema reference | `docs/SOLR_EXPLORATION.md` | Historical: original redhat-okp container schema map |
 
 ## Tekton Pipeline Maintenance
@@ -232,7 +315,7 @@ __init__.py → build_info, config, metrics (side-effect import), request_id, se
 build_info.py → (standalone; reads COMMIT_SHA env var, APP_ROOT/COMMIT_SHA file, or local `git rev-parse`)
 tools/__init__.py → tools/search.py, tools/document.py, tools/run_code.py
 tools/search.py → config, metrics, portal, server
-tools/document.py → content, metrics, server, solr, tools/shared.py, types
+tools/document.py → content, metrics, outline, server, solr, tools/shared.py, types
 tools/run_code.py → config, server
 metrics.py  → server (imports mcp for custom_route)
 request_id.py → fastmcp.server.dependencies, fastmcp.server.middleware, starlette
@@ -241,9 +324,10 @@ portal.py   → config, content, formatting, intent, solr, types
 formatting.py → (standalone)
 solr.py     → bm25, config, metrics, types
 bm25.py     → (standalone)
-server.py   → config
+server.py   → config, outline
 telemetry.py → build_info, config, sentry_sdk
-content.py  → types
+content.py  → outline, types
+outline.py  → (standalone; stdlib html.parser + httpx)
 types.py    → (standalone)
 ```
 
@@ -301,6 +385,12 @@ No circular imports. `types.py`, `bm25.py`, and `formatting.py` have zero intern
       logger.exception("...")
       return "user-friendly message"
   ```
+
+### Query Content Logging (CWE-532)
+- **Never log user query content at INFO level or above.** Tool arguments derive from end-user prompts and may contain hostnames, internal IPs, or error messages. Log operational data only: query count, result counts, doc IDs (Red Hat paths), timing, error types.
+- Solr query parameters (`q`, `fq`) are logged at **DEBUG** only, since `q` carries the user's cleaned query for search calls.
+- The `doc_id` parameter (a Red Hat documentation path, not user-supplied PII) is safe to log at INFO.
+- Security audit: RSPEED-3365, CWE-532, FIND-005.
 
 ### Async
 - All MCP tool functions are `async`

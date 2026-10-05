@@ -6,7 +6,7 @@ readme = "README.md"
 authors = [{ name = "Major Hayden", email = "major@redhat.com" }]
 requires-python = ">=3.12"
 dependencies = [
-    "fastmcp>=3.3.1",
+    "fastmcp>=3.4.4",
     "httpx",
     "prometheus_client>=0.25.0",
     "pydantic-settings>=2.14.1",
