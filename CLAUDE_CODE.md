@@ -24,7 +24,7 @@ podman logs -f redhat-okp
 podman run -d --pod okp --name okp-mcp \
   -e MCP_TRANSPORT=streamable-http \
   -e MCP_SOLR_URL=http://localhost:8983 \
-  quay.io/redhat-user-workloads/rhel-lightspeed-tenant/okp-mcp
+  quay.io/redhat-services-prod/rhel-lightspeed-tenant/rhel-knowledge-bridge
 ```
 
 ### 2. Use with Claude Code

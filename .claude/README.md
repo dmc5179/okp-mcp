@@ -31,7 +31,7 @@ podman logs -f redhat-okp
 podman run -d --pod okp --name okp-mcp \
   -e MCP_TRANSPORT=streamable-http \
   -e MCP_SOLR_URL=http://localhost:8983 \
-  quay.io/redhat-user-workloads/rhel-lightspeed-tenant/okp-mcp
+  quay.io/redhat-services-prod/rhel-lightspeed-tenant/rhel-knowledge-bridge
 ```
 
 Get your OKP access key from: https://access.redhat.com/offline/access
@@ -166,7 +166,7 @@ podman run -d --pod okp --name okp-mcp \
   -e MCP_TRANSPORT=streamable-http \
   -e MCP_HOST=127.0.0.1 \
   -e MCP_SOLR_URL=http://127.0.0.1:8983 \
-  quay.io/redhat-user-workloads/rhel-lightspeed-tenant/okp-mcp
+  quay.io/redhat-services-prod/rhel-lightspeed-tenant/rhel-knowledge-bridge
 ```
 
 ## More Information
