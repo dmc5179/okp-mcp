@@ -20,7 +20,9 @@ EnvironmentFile=%h/.config/okp-mcp/solr.env
 PodmanArgs=--stop-timeout=30
 
 [Service]
-Restart=on-failure
+# always, not on-failure: a graceful SIGTERM exits 0, which on-failure
+# treats as success and declines to restart.
+Restart=always
 TimeoutStartSec=600
 
 [Install]

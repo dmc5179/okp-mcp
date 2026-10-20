@@ -16,7 +16,9 @@ Environment=MCP_SOLR_URL=http://okp-solr:8983
 AutoUpdate=registry
 
 [Service]
-Restart=on-failure
+# always, not on-failure: the server traps SIGTERM and exits 0, which
+# on-failure treats as success and declines to restart.
+Restart=always
 
 [Install]
 WantedBy=default.target
