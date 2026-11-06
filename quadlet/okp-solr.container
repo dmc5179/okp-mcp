@@ -5,6 +5,10 @@
 Description=OKP Solr search engine
 
 [Container]
+# Floating tag for a personal workstation. For reproducible or customer-facing
+# deployments pin a release instead, e.g.
+#   Image=registry.redhat.io/offline-knowledge-portal/rhokp-rhel9:<version>-<build>@sha256:<digest>
+# (see docs/DISCONNECTED.md for the current pinned reference).
 Image=registry.redhat.io/offline-knowledge-portal/rhokp-rhel9:latest
 ContainerName=okp-solr
 Network=okp.network

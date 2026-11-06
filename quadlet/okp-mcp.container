@@ -6,6 +6,9 @@ After=okp-solr.service
 Requires=okp-solr.service
 
 [Container]
+# Floating tag on purpose: AutoUpdate=registry only works with a tag, and
+# podman-auto-update.timer pulls each new upstream build. A digest-pinned
+# reference disables auto-update; use one where reproducibility matters more.
 Image=quay.io/redhat-services-prod/rhel-lightspeed-tenant/rhel-knowledge-bridge:latest
 ContainerName=okp-mcp
 Network=okp.network

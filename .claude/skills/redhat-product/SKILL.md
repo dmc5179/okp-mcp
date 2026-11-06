@@ -2,21 +2,33 @@
 name: redhat-product
 description: Search Red Hat product documentation, CVEs, errata, solutions, and support articles via OKP MCP
 triggers:
-  - "rhel"
-  - "red hat"
+  # Explicit doc requests
+  - "official documentation"
+  - "official docs"
   - "product documentation"
   - "redhat docs"
-  - "official documentation"
+  - "red hat docs"
+  - "release notes"
+  # Security/compliance
   - "cve"
   - "errata"
+  - "rhsa-"
+  - "rhba-"
+  - "rhea-"
+  - "security advisory"
+  # Lifecycle/deprecation
+  - "deprecated"
+  - "end of life"
+  - "lifecycle"
+  - "support policy"
+  - "support case"
+  # Knowledge base
   - "kbase"
   - "knowledge base"
-  - "openshift"
-  - "ansible"
-  - "satellite"
-  - "virtualization"
-  - "support case"
-  - "lifecycle"
+  # SRE operational
+  - "upgrade path"
+  - "supported configuration"
+  - "certified"
 ---
 
 # Red Hat Product Documentation Skill

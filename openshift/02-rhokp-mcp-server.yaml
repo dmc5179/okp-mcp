@@ -39,8 +39,7 @@ spec:
             app: rhokp-mcp
       containers:
       - name: rhokp-mcp
-        #image: quay.io/danclark/okp-mcp:latest # Old copy before move
-        image: quay.io/redhat-services-prod/rhel-lightspeed-tenant/rhel-knowledge-bridge:latest
+        image: quay.io/redhat-services-prod/rhel-lightspeed-tenant/rhel-knowledge-bridge:e36106a@sha256:99fd47d068c6b99db3068a7276c80e1d0bf98d3a1e908cae2d23b2b4571f7086
         env:
         - name: MCP_TRANSPORT
           value: streamable-http

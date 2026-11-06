@@ -452,3 +452,51 @@ If findings come back, address them before creating the PR (or flag them for the
 ## Workarounds
 
 - `run_code()` in `src/okp_mcp/tools/run_code.py` is a KLUDGE: placeholder tool that prevents Gemini 2.5 Flash from crashing when it tries to use its built-in code execution tool. Returns a polite "not supported" message. Do not remove without verifying Gemini behavior first.
+
+## Fork Additions
+
+This repository is a fork of `rhel-lightspeed/okp-mcp`. Everything above this section
+mirrors upstream; keep fork-only material here so upstream merges stay conflict-free.
+
+```text
+CLAUDE.md                     # imports AGENTS.md for Claude Code, plus fork notes
+CLAUDE_CODE.md                # using the server from Claude Code: MCP registration, skill
+.claude/
+  README.md                   # index of the Claude Code files
+  skills/redhat-product/SKILL.md  # documentation-search skill (uses mcp__okp-mcp__* tools)
+  examples/test-mcp-connection.md # manual integration checks
+docs/DISCONNECTED.md          # oc-mirror ImageSetConfiguration with digest-pinned images
+openshift/
+  01-rhokp.yaml               # RHOKP Deployment/Service (plain manifests, envsubst RHOKP_KEY)
+  02-rhokp-mcp-server.yaml    # MCP server Deployment/Service/Route
+  03-rhokp-mcp-server-hpa.yaml, 04-rhokp-vpa.yaml, 05-rhokp-pdb.yaml  # scaling + disruption budget
+  README.md                   # walkthrough for the numbered manifests
+  kustomize/                  # same stack as a kustomize base for the Argo ApplicationSet
+  dashboards/                 # Grafana dashboard ConfigMaps (okp-mcp, SLO)
+```
+
+### Image pinning
+
+Customer-facing manifests pin images by **digest**, never by `:latest`:
+
+- `openshift/kustomize/kustomization.yaml` pins both images centrally in its `images:`
+  block; the deployments name the image without a tag.
+- `openshift/01-rhokp.yaml` and `openshift/02-rhokp-mcp-server.yaml` use
+  `name:tag@sha256:...` (the tag is for humans; the runtime pulls the digest).
+- `docs/DISCONNECTED.md` lists the same digests for `oc-mirror`.
+
+Bump all four together. Use the manifest-list digest from
+`skopeo inspect --no-tags docker://<image>:<tag> | jq -r .Digest` so amd64 and arm64 both
+resolve. RHOKP publishes version tags (`1.3.0-<build>`) alongside `latest`; the MCP image
+is tagged by upstream commit SHA in `quay.io/redhat-services-prod/...`.
+
+Exceptions, on purpose:
+
+- `quadlet/*.container` keep `:latest`. `okp-mcp.container` uses `AutoUpdate=registry`,
+  which only works with a tag. Comments in both files show how to pin.
+- `podman-compose.yml`, `README.md`, and `openshift/okp-mcp.yml` are upstream files; leave
+  their tags to upstream. The one fork edit is `README.md` pointing the MCP quickstart at
+  `redhat-services-prod` instead of `redhat-user-workloads`; drop it once upstream fixes it.
+- Never reference `quay.io/redhat-user-workloads/...` in docs or manifests. It is Konflux's
+  internal build output, not a release channel. The customer-supported MCP image is
+  `registry.redhat.io/rhel-cla/rhel-knowledge-bridge-rhel10` (same builds, version tags).

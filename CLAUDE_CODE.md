@@ -1,117 +1,89 @@
-# Claude Code Integration
+# Using OKP MCP from Claude Code
 
-This repository includes Claude Code configuration for seamless access to Red Hat product documentation through the Offline Knowledge Portal (OKP).
+How to point Claude Code at a running OKP MCP server and use the bundled
+`redhat-product` skill. For developing the server itself, see [AGENTS.md](AGENTS.md).
 
-## Quick Start
+## 1. Start the services
 
-### 1. Start the Services
+Get an access key from https://access.redhat.com/offline/access, then:
 
 ```bash
-# Create pod
-podman pod create --name okp -p 8983:8983 -p 8000:8000
+podman login registry.redhat.io
+podman pod create --name okp -p 127.0.0.1:8983:8983 -p 127.0.0.1:8000:8000
 
-# Start OKP Solr (get access key from https://access.redhat.com/offline/access)
 podman run -d --pod okp --name redhat-okp \
   -e ACCESS_KEY=<your-access-key> \
   -e SOLR_JETTY_HOST=0.0.0.0 \
-  registry.redhat.io/offline-knowledge-portal/rhokp-rhel9:latest
+  -v okp-solr-data:/opt/solr/server/solr/portal/data \
+  registry.redhat.io/offline-knowledge-portal/rhokp-rhel9:1.3.0-1793303796
 
-# Wait for Solr to start
-podman logs -f redhat-okp
-# Look for: "Started Solr server on port 8983"
+podman logs -f redhat-okp   # wait for "Started Solr server on port 8983"
 
-# Start MCP server
 podman run -d --pod okp --name okp-mcp \
   -e MCP_TRANSPORT=streamable-http \
   -e MCP_SOLR_URL=http://localhost:8983 \
-  quay.io/redhat-services-prod/rhel-lightspeed-tenant/rhel-knowledge-bridge
+  quay.io/redhat-services-prod/rhel-lightspeed-tenant/rhel-knowledge-bridge:e36106a
 ```
 
-### 2. Use with Claude Code
+The tags above are examples of pinned releases; see
+[docs/DISCONNECTED.md](docs/DISCONNECTED.md) for how to find current tags and their
+digests. Inside the pod the MCP server reaches the RHOKP HTML mirror at
+`http://localhost:8080` automatically, so `get_document` outlines carry section anchors
+with no extra configuration.
 
-The integration is automatically available when running Claude Code in this project directory.
+For a systemd-managed setup that survives reboots, use the quadlets instead
+([quadlet/README.md](quadlet/README.md)).
 
-#### Using the Skill
+## 2. Register the server with Claude Code
 
+Register the HTTP endpoint once, at user scope, under the name `okp-mcp`. The skill
+expects that name (its tools are `mcp__okp-mcp__search_portal` and
+`mcp__okp-mcp__get_document`):
+
+```bash
+claude mcp add --scope user --transport http okp-mcp http://localhost:8000/mcp
+claude mcp list   # okp-mcp: http://localhost:8000/mcp (HTTP) - ✔ Connected
 ```
-/redhat-product
+
+The repository's own `.mcp.json` also defines an `okp-mcp` server, but that one runs the
+server **from source over stdio** with hot reload. It is for working on okp-mcp and needs
+Solr on `localhost:8983` plus the HTML mirror on `localhost:8085` (`podman-compose up -d`).
+Claude Code prompts before enabling it. If you only want to *use* the running container,
+decline, or add this to `.claude/settings.local.json`:
+
+```json
+{ "disabledMcpjsonServers": ["okp-mcp"] }
 ```
 
-Then ask questions like:
+## 3. Use the skill
+
+The `redhat-product` skill lives in `.claude/skills/redhat-product/SKILL.md` and is picked
+up automatically when Claude Code runs in this directory. Invoke it with `/redhat-product`,
+or ask a question it covers:
+
 - "How do I configure firewalld on RHEL 9?"
 - "What are the FIPS requirements for RHEL 8?"
-- "Search for CVE-2024-1234"
+- "What does RHSA-2026:1234 fix?"
 
-#### Direct MCP Access
+To make it available in every project, copy the directory to `~/.claude/skills/`.
 
-The `redhat-okp` MCP server provides two tools:
+The server exposes two tools:
 
-**search_portal**: Search the knowledge base
-```python
-await use_mcp_tool("redhat-okp", "search_portal", {
-  "query": "How to configure SELinux on RHEL 9?",
-  "max_results": 7
-})
-```
+| Tool | Arguments | Purpose |
+|------|-----------|---------|
+| `search_portal` | `query` (string or list of up to 3 reformulations), `max_results` (default 7) | Search docs, solutions, articles, CVEs, errata |
+| `get_document` | `doc_id` (URL from search results), `query` (optional) | Fetch one document; with `query`, return the most relevant passages labelled with section anchors; without, return the section outline |
 
-**get_document**: Fetch full document content
-```python
-await use_mcp_tool("redhat-okp", "get_document", {
-  "doc_id": "https://access.redhat.com/documentation/...",
-  "query": "SELinux configuration"
-})
-```
+## What's here
 
-## What's Included
-
-- **`.claude/mcp.json`**: MCP server connection configuration
-- **`.claude/skills/redhat-product.skill.md`**: Red Hat documentation skill
-- **`.claude/README.md`**: Detailed setup and troubleshooting guide
-
-## Features
-
-- **600k+ Documents**: Access to all Red Hat product documentation, CVEs, errata, solutions, and articles
-- **Intelligent Search**: Multi-query search with reciprocal rank fusion for better coverage
-- **Relevant Passages**: Automatic extraction of relevant sections from large documentation pages
-- **Offline Access**: Works with the offline knowledge portal when internet access is limited
-
-## Coverage
-
-The OKP index includes:
-- Red Hat Enterprise Linux (all versions) documentation
-- Red Hat Virtualization guides
-- OpenShift documentation
-- Security advisories (CVEs)
-- Errata and updates
-- Knowledge base articles and solutions
-- Support policies and lifecycle dates
-
-## More Information
-
-See [`.claude/README.md`](.claude/README.md) for:
-- Detailed setup instructions
-- Alternative installation methods (quadlets, podman-compose)
-- Troubleshooting guide
-- Persistence configuration
-
-See the main [`README.md`](README.md) for:
-- OKP MCP server architecture
-- Development setup
-- Testing and CI/CD
-
-## Getting an Access Key
-
-1. Log in to the Red Hat Customer Portal
-2. Visit https://access.redhat.com/offline/access
-3. Generate or retrieve your OKP access key
-4. Use it in the `ACCESS_KEY` environment variable when starting the container
+- `CLAUDE.md`: loads `AGENTS.md` as project instructions for Claude Code
+- `.claude/skills/redhat-product/SKILL.md`: the documentation search skill
+- `.claude/examples/test-mcp-connection.md`: manual checks for the integration
+- `.mcp.json`: stdio dev server (see above)
 
 ## Cleanup
 
 ```bash
-# Stop the pod
-podman pod stop okp
-
-# Remove the pod (will need to re-index on next start)
-podman pod rm -f okp
+podman pod rm -f okp            # removes both containers
+podman volume rm okp-solr-data  # only if you also want to discard the index
 ```

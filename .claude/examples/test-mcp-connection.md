@@ -32,7 +32,7 @@ Expected behavior:
 Test the multi-query search capability:
 
 ```
-Search Red Hat documentation for SELinux configuration in RHEL 9. 
+Search Red Hat documentation for SELinux configuration in RHEL 9.
 Use multiple query reformulations for better coverage.
 ```
 
@@ -71,33 +71,23 @@ Expected behavior:
 - Includes affected products and versions
 - Provides mitigation steps
 
-## Test 5: Direct MCP Tool Usage
+## Test 5: Direct Tool Calls
 
-You can also test by directly calling the MCP tools:
+Ask for a tool by name to bypass the skill and exercise the server directly:
 
-### Search Test
-
-```python
-result = await use_mcp_tool("redhat-okp", "search_portal", {
-    "query": [
-        "How do I enable FIPS mode on RHEL 9?",
-        "RHEL 9 FIPS 140-3 configuration steps",
-        "Red Hat Enterprise Linux 9 Federal Information Processing Standard compliance"
-    ],
-    "max_results": 7
-})
-print(result)
+```
+Call mcp__okp-mcp__search_portal with query ["How do I enable FIPS mode on RHEL 9?",
+"RHEL 9 FIPS 140-3 configuration steps"] and max_results 7.
 ```
 
-### Document Retrieval Test
-
-```python
-result = await use_mcp_tool("redhat-okp", "get_document", {
-    "doc_id": "https://access.redhat.com/documentation/en-us/red_hat_enterprise_linux/9/html/security_hardening/index",
-    "query": "FIPS mode configuration"
-})
-print(result)
 ```
+Call mcp__okp-mcp__get_document with doc_id
+https://access.redhat.com/documentation/en-us/red_hat_enterprise_linux/9/html-single/security_hardening/index
+and query "FIPS mode configuration".
+```
+
+Expected behavior: the first returns ranked results with URLs; the second returns
+passages labelled with section anchors such as `#switching-the-system-to-fips-mode_switching-rhel-to-fips-mode`.
 
 ## Verification Commands
 
@@ -151,11 +141,11 @@ Should return 3 documents related to firewalld.
 
 ### Issue: MCP Server Not Found
 
-**Error**: `MCP server 'redhat-okp' not found`
+**Error**: `/mcp` does not list `okp-mcp`, or the skill reports no `mcp__okp-mcp__*` tools
 
-**Solution**: 
-1. Check `.claude/mcp.json` exists in the project directory
-2. Restart Claude Code in the project directory
+**Solution**:
+1. Register it: `claude mcp add --scope user --transport http okp-mcp http://localhost:8000/mcp`
+2. Check it connects: `claude mcp list`
 3. Verify the pod is running: `podman pod ps | grep okp`
 
 ### Issue: Connection Refused
@@ -219,8 +209,9 @@ curl -s http://localhost:8000/metrics
 ```
 
 Provides Prometheus metrics including:
-- `okp_mcp_tool_calls_total`: Count of tool invocations
-- `okp_mcp_tool_duration_seconds`: Tool execution time
+- `okp_tool_calls_total`: Count of tool invocations
+- `okp_tool_duration_seconds`: Tool execution time
+- `okp_solr_queries_total`, `okp_solr_query_duration_seconds`: Solr backend calls
 
 ### Watch Container Logs
 
@@ -235,6 +226,6 @@ podman logs -f redhat-okp
 ## Next Steps
 
 After successful testing:
-1. Review `.claude/skills/redhat-product.skill.md` for advanced usage
-2. Check `.claude/README.md` for persistence configuration
+1. Review `.claude/skills/redhat-product/SKILL.md` for search strategy guidance
+2. Check `CLAUDE_CODE.md` for setup and registration
 3. See `quadlet/README.md` for systemd integration

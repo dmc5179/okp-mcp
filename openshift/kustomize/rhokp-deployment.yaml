@@ -22,7 +22,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: rhokp
-          image: registry.redhat.io/offline-knowledge-portal/rhokp-rhel9:latest
+          image: registry.redhat.io/offline-knowledge-portal/rhokp-rhel9
           env:
             - name: SOLR_JETTY_HOST
               value: "0.0.0.0"
