@@ -98,7 +98,7 @@ Subsequent starts of the same container (`podman pod stop okp` / `podman pod sta
 podman run -d --pod okp --name okp-mcp \
   -e MCP_TRANSPORT=streamable-http \
   -e MCP_SOLR_URL=http://localhost:8983 \
-  quay.io/redhat-services-prod/rhel-lightspeed-tenant/rhel-knowledge-bridge
+  registry.redhat.io/rhel-cla/rhel-knowledge-bridge-rhel10:v1.0.2-1793868366
 ```
 
 ### 4. Verify

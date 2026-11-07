@@ -20,6 +20,7 @@ repos:
     hooks:
       - id: check-toml
       - id: check-yaml
+        args: [--allow-multiple-documents]  # fork: openshift/0*.yaml are multi-doc manifests
       - id: check-merge-conflict
       - id: end-of-file-fixer
       - id: trailing-whitespace

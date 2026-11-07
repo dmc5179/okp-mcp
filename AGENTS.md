@@ -466,6 +466,9 @@ CLAUDE_CODE.md                # using the server from Claude Code: MCP registrat
   skills/redhat-product/SKILL.md  # documentation-search skill (uses mcp__okp-mcp__* tools)
   examples/test-mcp-connection.md # manual integration checks
 docs/DISCONNECTED.md          # oc-mirror ImageSetConfiguration with digest-pinned images
+.github/
+  renovate-fork.js            # self-hosted Renovate config: only the two pinned OKP images
+  workflows/renovate-fork.yml # weekly Renovate run (fork-only guard)
 openshift/
   01-rhokp.yaml               # RHOKP Deployment/Service (plain manifests, envsubst RHOKP_KEY)
   02-rhokp-mcp-server.yaml    # MCP server Deployment/Service/Route
@@ -477,26 +480,61 @@ openshift/
 
 ### Image pinning
 
-Customer-facing manifests pin images by **digest**, never by `:latest`:
+Customer-facing manifests pin both images by **digest**, never by `:latest`:
 
-- `openshift/kustomize/kustomization.yaml` pins both images centrally in its `images:`
-  block; the deployments name the image without a tag.
-- `openshift/01-rhokp.yaml` and `openshift/02-rhokp-mcp-server.yaml` use
-  `name:tag@sha256:...` (the tag is for humans; the runtime pulls the digest).
-- `docs/DISCONNECTED.md` lists the same digests for `oc-mirror`.
+| Image | Tags look like |
+|-------|----------------|
+| `registry.redhat.io/offline-knowledge-portal/rhokp-rhel9` | `1.3.0-1793303796` |
+| `registry.redhat.io/rhel-cla/rhel-knowledge-bridge-rhel10` | `v1.0.2-1793868366` |
 
-Bump all four together. Use the manifest-list digest from
-`skopeo inspect --no-tags docker://<image>:<tag> | jq -r .Digest` so amd64 and arm64 both
-resolve. RHOKP publishes version tags (`1.3.0-<build>`) alongside `latest`; the MCP image
-is tagged by upstream commit SHA in `quay.io/redhat-services-prod/...`.
+The MCP image is the product-shipped RHEL CLA build of this server, from the same pipeline
+as `quay.io/redhat-services-prod/.../rhel-knowledge-bridge` (identical digests per build),
+but with version tags and Red Hat support.
 
-Exceptions, on purpose:
+Where the pins live, all kept in step by Renovate:
 
-- `quadlet/*.container` keep `:latest`. `okp-mcp.container` uses `AutoUpdate=registry`,
-  which only works with a tag. Comments in both files show how to pin.
-- `podman-compose.yml`, `README.md`, and `openshift/okp-mcp.yml` are upstream files; leave
-  their tags to upstream. The one fork edit is `README.md` pointing the MCP quickstart at
-  `redhat-services-prod` instead of `redhat-user-workloads`; drop it once upstream fixes it.
+- `openshift/kustomize/kustomization.yaml`: `images:` block with `newTag: <tag>@<digest>`
+  (one field; Renovate rejects separate `newTag` + `digest`). Deployments name the image
+  without a tag.
+- `openshift/01-rhokp.yaml`, `openshift/02-rhokp-mcp-server.yaml`: `image: name:tag@sha256:...`.
+- `docs/DISCONNECTED.md`: oc-mirror list; the `# ..., tag <tag>` comment directly above each
+  `- name: image@digest` line is what Renovate's regex manager keys on.
+- `CLAUDE_CODE.md`, `README.md`, `.claude/examples/*.md`: quickstart commands, tag only.
+
+Use manifest-list digests (`skopeo inspect --no-tags docker://<image>:<tag> | jq -r .Digest`)
+so amd64 and arm64 both resolve. Do not trust `latest` to be the newest build.
+
+### Renovate (fork)
+
+`.github/workflows/renovate-fork.yml` runs self-hosted Renovate weekly (and on
+`workflow_dispatch`) with `.github/renovate-fork.js`, opening one grouped "OKP images" PR.
+That config ignores the upstream `renovate.json` and its org preset and disables every
+dependency except the two images above, so it never duplicates upstream's dependency PRs.
+It needs repo secrets `RENOVATE_TOKEN`, `RH_REGISTRY_USERNAME`, `RH_REGISTRY_PASSWORD`
+(registry.redhat.io refuses anonymous tag listing). Both tag schemes use `regex:`
+versioning; plain docker versioning would read the build timestamp as an incompatible
+suffix and never propose an update.
+
+Test config changes locally (Renovate 44 needs a newer Node than Fedora ships, so use the
+container):
+
+```bash
+A=$(jq -r '.auths["registry.redhat.io"].auth' ~/.docker/config.json | base64 -d)
+podman run --rm --userns=keep-id -v "$PWD":/repo:ro,Z -w /repo \
+  -e RH_REGISTRY_USERNAME="${A%%:*}" -e RH_REGISTRY_PASSWORD="${A#*:}" \
+  -e RENOVATE_CONFIG_FILE=/repo/.github/renovate-fork.js -e RENOVATE_PLATFORM=local \
+  -e RENOVATE_REPOSITORIES='[]' -e RENOVATE_DRY_RUN=lookup -e LOG_LEVEL=debug \
+  ghcr.io/renovatebot/renovate:44
+```
+
+### Exceptions, on purpose
+
+- `quadlet/okp-mcp.container` stays on `quay.io/redhat-services-prod/...:latest` with
+  `AutoUpdate=registry`, which only works with a tag. Switching it to registry.redhat.io
+  would also make the auto-update timer depend on a persisted registry login. Comments in
+  both quadlets show how to pin.
+- `podman-compose.yml` and `openshift/okp-mcp.yml` are upstream files; leave their image
+  references to upstream. The fork does edit the MCP quickstart line in `README.md`
+  (upstream points it at `redhat-user-workloads`); drop that once upstream fixes it.
 - Never reference `quay.io/redhat-user-workloads/...` in docs or manifests. It is Konflux's
-  internal build output, not a release channel. The customer-supported MCP image is
-  `registry.redhat.io/rhel-cla/rhel-knowledge-bridge-rhel10` (same builds, version tags).
+  internal build output, not a release channel.
