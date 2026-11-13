@@ -529,10 +529,15 @@ podman run --rm --userns=keep-id -v "$PWD":/repo:ro,Z -w /repo \
 
 ### Exceptions, on purpose
 
-- `quadlet/okp-mcp.container` stays on `quay.io/redhat-services-prod/...:latest` with
-  `AutoUpdate=registry`, which only works with a tag. Switching it to registry.redhat.io
-  would also make the auto-update timer depend on a persisted registry login. Comments in
-  both quadlets show how to pin.
+- Both quadlets float on `:latest` with `AutoUpdate=registry`, which only works with a tag.
+  `okp-mcp.container` uses `quay.io/redhat-services-prod/...` rather than registry.redhat.io
+  because `rhel-knowledge-bridge-rhel10:latest` has lagged the newest build (see
+  `docs/DISCONNECTED.md`). `okp-solr.container` pulls from registry.redhat.io, so the
+  auto-update timer needs a registry login that survives reboot (`quadlet/README.md`).
+  Comments in both quadlets show how to pin.
+- `okp-solr.container` reads the access key from the podman secret `rhokp_access_key`, as in
+  the official RHOKP systemd guide. Every start re-extracts the image's encrypted index into
+  the data volume (~30s), which is why an image update needs no volume reset.
 - `podman-compose.yml` and `openshift/okp-mcp.yml` are upstream files; leave their image
   references to upstream. The fork does edit the MCP quickstart line in `README.md`
   (upstream points it at `redhat-user-workloads`); drop that once upstream fixes it.

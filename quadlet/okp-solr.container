@@ -5,11 +5,14 @@
 Description=OKP Solr search engine
 
 [Container]
-# Floating tag for a personal workstation. For reproducible or customer-facing
-# deployments pin a release instead, e.g.
+# Floating tag for a personal workstation: AutoUpdate=registry only works with
+# a tag, and RHOKP ships new content roughly weekly. Every start re-extracts the
+# image's bundled index into the data volume, so an update needs no volume reset.
+# For reproducible or customer-facing deployments pin a release instead, e.g.
 #   Image=registry.redhat.io/offline-knowledge-portal/rhokp-rhel9:<version>-<build>@sha256:<digest>
-# (see docs/DISCONNECTED.md for the current pinned reference).
+# (see docs/DISCONNECTED.md for the current pinned reference) and drop AutoUpdate.
 Image=registry.redhat.io/offline-knowledge-portal/rhokp-rhel9:latest
+AutoUpdate=registry
 ContainerName=okp-solr
 Network=okp.network
 PublishPort=8983:8983
@@ -18,7 +21,8 @@ PublishPort=8443:8443
 Volume=okp-solr-data.volume:/opt/solr/server/solr/portal/data
 
 Environment=SOLR_JETTY_HOST=0.0.0.0
-EnvironmentFile=%h/.config/okp-mcp/solr.env
+# Access key from a podman secret, as in the official RHOKP systemd guide.
+Secret=rhokp_access_key,type=env,target=ACCESS_KEY
 
 # Graceful shutdown window before forcible stop.
 PodmanArgs=--stop-timeout=30

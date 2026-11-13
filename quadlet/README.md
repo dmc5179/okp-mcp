@@ -10,17 +10,29 @@ Podman quadlet files that run the OKP Solr index and MCP server as rootless syst
 
 ## Setup
 
-### 1. Create the environment file
+### 1. Store the access key as a podman secret
 
-The Solr container reads its access key from a file rather than embedding it in the quadlet:
+The Solr container reads its access key from a podman secret named `rhokp_access_key`, mapped to the `ACCESS_KEY` environment variable (`Secret=rhokp_access_key,type=env,target=ACCESS_KEY`). This matches the official RHOKP systemd guide and keeps the key out of the quadlet file. Paste the key when prompted, then press Enter:
 
 ```bash
-mkdir -p ~/.config/okp-mcp
-cat > ~/.config/okp-mcp/solr.env << 'EOF'
-ACCESS_KEY=<your-access-key>
-EOF
-chmod 600 ~/.config/okp-mcp/solr.env
+read -rs KEY && printf '%s' "$KEY" | podman secret create --replace rhokp_access_key - && unset KEY
 ```
+
+Confirm it exists without printing the value:
+
+```bash
+podman secret ls
+```
+
+Podman's default secret driver stores the value unencrypted under `~/.local/share/containers/storage/secrets/` (mode 600), so treat that directory like any other credential file. To read the key back later: `podman secret inspect --showsecret rhokp_access_key`.
+
+> **Upgrading from an older checkout?** Earlier versions read the key from `~/.config/okp-mcp/solr.env`. Move it into the secret without echoing it, then remove the file:
+>
+> ```bash
+> sed -n 's/^ACCESS_KEY=//p' ~/.config/okp-mcp/solr.env | tr -d '\n' \
+>   | podman secret create --replace rhokp_access_key -
+> rm -r ~/.config/okp-mcp
+> ```
 
 ### 2. Install the quadlet files
 
@@ -86,6 +98,12 @@ To keep services running after logout (and start them at boot without logging in
 loginctl enable-linger "$USER"
 ```
 
+Both units set `Restart=always`, not `Restart=on-failure`. The containers trap SIGTERM and exit 0, which `on-failure` counts as success, so a container stopped by anything other than `systemctl` (OOM pressure, `podman stop`, an auto-update) would otherwise stay down. With `always`, systemd brings it back; `systemctl --user stop` still stops it for good. To confirm a restart happened:
+
+```bash
+systemctl --user show okp-mcp -p NRestarts
+```
+
 View logs:
 
 ```bash
@@ -107,7 +125,26 @@ The MCP server container is configured with `AutoUpdate=registry`. To enable per
 systemctl --user enable --now podman-auto-update.timer
 ```
 
-Without this timer, the auto-update label is present but nothing triggers it.
+Without this timer, the auto-update label is present but nothing triggers it. The timer is disabled by default.
+
+It runs daily (with up to 15 minutes of random delay) and catches up after a missed run (`Persistent=true`), so a laptop that was asleep updates on the next wake. With lingering enabled it runs without an active login. If a new image fails to start, `podman auto-update` rolls back to the previous one.
+
+Preview what it would update, and check when it next fires:
+
+```bash
+podman auto-update --dry-run
+systemctl --user list-timers podman-auto-update.timer
+```
+
+Both containers are labelled `AutoUpdate=registry`. RHOKP ships new content roughly weekly as a new image, so the timer keeps the search index current. Each Solr start re-extracts the index bundled in the image into the data volume (about 30 seconds on a laptop), so an update needs no volume reset. Search is briefly unavailable while it restarts, and `okp-mcp` restarts with it because of its `Requires=okp-solr.service`.
+
+The timer pulls from `registry.redhat.io` without you, so it needs a login that survives a reboot. `podman login` writes to `${XDG_RUNTIME_DIR}/containers/auth.json` by default, which is tmpfs and gone after a reboot. Log in to a persistent file instead:
+
+```bash
+podman login --authfile ~/.config/containers/auth.json registry.redhat.io
+```
+
+Podman also falls back to `~/.docker/config.json` if you already have registry credentials there.
 
 ## Troubleshooting
 
@@ -130,7 +167,7 @@ journalctl --user -xeu okp-solr --no-pager
 ```
 
 Common issues:
-- Missing `~/.config/okp-mcp/solr.env` (create it per step 1)
+- Missing `rhokp_access_key` secret (`podman secret ls`; create it per step 1). Quadlet fails the unit with a "no such secret" error.
 - Not logged into `registry.redhat.io` (`podman login registry.redhat.io`)
 - Port conflict on 8983 or 8000 (stop any existing Solr or MCP containers)
 
@@ -149,11 +186,11 @@ rm -r ~/.config/containers/systemd/okp-mcp
 systemctl --user daemon-reload
 ```
 
-Optionally remove the Solr data volume and environment file:
+Optionally remove the Solr data volume and the access key secret:
 
 ```bash
 podman volume rm okp-solr-data
-rm -r ~/.config/okp-mcp
+podman secret rm rhokp_access_key
 ```
 
 ## Files
